@@ -22,20 +22,11 @@ struct entry
 
 entry *ehead, *etail;
 
-/* Allocate copy string in heap */
-char *
-alloc_str(const char *s)
-{
-    char *t = (char *) malloc(strlen(s) + 1);
-    strcpy(t, s);
-    return t;
-}
-
 void
 add_entry(const char *nm)
 {
     entry *ent = (entry *) malloc(sizeof(entry));
-    char *name = alloc_str(nm);
+    char *name = strdup(nm);
     ent->name = name;
     ent->buf = (char *) malloc(MAXLEN);
     ent->c = 0;
@@ -244,7 +235,7 @@ counter_rename(const char *from, const char *to)
 
     remove_entry(to + 1);
     free(ent->name);
-    ent->name = alloc_str(to + 1);
+    ent->name = strdup(to + 1);
 
     return 0;
 }
