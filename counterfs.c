@@ -16,6 +16,7 @@ struct entry
 {
     char *name, *buf;
     unsigned int c;
+    time_t atime, mtime;
     entry *prev, *next;
 };
 
@@ -105,6 +106,8 @@ counter_getattr(const char *path, struct stat *stbuf)
         stbuf->st_mode = S_IFREG | 0666;
         stbuf->st_nlink = 1;
         stbuf->st_size = strlen(ent->buf);
+        stbuf->st_atime = ent->atime;
+        stbuf->st_mtime = ent->mtime;
     }
     else if (strcmp(path, "/") == 0) {
         stbuf->st_mode = S_IFDIR | 0755;
@@ -144,6 +147,7 @@ int
 counter_open(const char *path, struct fuse_file_info *fi)
 {
     entry *ent;
+    char *tbuf;
 
     if ((fi->flags & 3) != O_RDONLY)
         return -EACCES;
@@ -154,6 +158,11 @@ counter_open(const char *path, struct fuse_file_info *fi)
     if (!find_entry(path + 1, &ent))
         return -ENOENT;
 
+    tbuf = malloc(MAXLEN);
+    fi->direct_io = 1;
+    fi->fh = (uint64_t) tbuf;
+    
+    sprintf(tbuf, "%d\n", ent->c);
     sprintf(ent->buf, "%d\n", ent->c++);
 
     return 0;
@@ -165,15 +174,15 @@ counter_read(const char *path, char *buf, size_t size,
 {
     size_t len;
     entry *ent;
-    (void) fi;
+    char *tbuf = (char *) fi->fh;
     if (!find_entry(path + 1, &ent))
         return -ENOENT;
 
-    len = strlen(ent->buf);
+    len = strlen(tbuf);
     if (offset < len) {
         if (offset + size > len)
             size = len - offset;
-        memcpy(buf, ent->buf + offset, size);
+        memcpy(buf, tbuf + offset, size);
     } else
         size = 0;
 
@@ -193,10 +202,20 @@ counter_create(const char *path, mode_t mod, struct fuse_file_info *fi)
     return 0;
 }
 
-/* Dummy function, sometimes necessary to create file */
 int
 counter_utimens(const char *path, const struct timespec tv[2])
 {
+    entry *ent;
+    
+    if (has_subdir(path))
+        return -ENOENT;
+
+    if (!find_entry(path + 1, &ent))
+        return -ENOENT;
+        
+    ent->atime = tv[0].tv_sec;
+    ent->mtime = tv[1].tv_sec;
+    
     return 0;
 }
 
@@ -230,12 +249,22 @@ counter_rename(const char *from, const char *to)
     return 0;
 }
 
+int
+counter_release(const char *path, struct fuse_file_info *fi)
+{
+    if (fi->fh)
+        free((void *) fi->fh);
+
+    return 0;
+}
+
 struct fuse_operations counter_oper = {
     .getattr  = counter_getattr,
     .unlink   = counter_unlink,
     .rename   = counter_rename,
     .open     = counter_open,
     .read     = counter_read,
+    .release  = counter_release,
     .readdir  = counter_readdir,
     .create   = counter_create,
     .utimens  = counter_utimens,
