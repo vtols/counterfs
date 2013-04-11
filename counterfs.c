@@ -79,6 +79,7 @@ remove_entry(const char *nm)
             ent->next->prev = ent->prev;
         else
             etail = ent->prev;
+        free(ent->name);
         free(ent->buf);
         free(ent);
         return 1;
