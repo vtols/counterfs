@@ -12,26 +12,42 @@
 #define MAXLEN 12
 
 typedef struct entry entry;
+typedef struct entry_data entry_data;
+
 struct entry
 {
-    char *name, *buf;
+    char *name;
+    entry_data *data;
+    entry *prev, *next;
+};
+
+struct entry_data
+{
+    char *buf;
     unsigned int c;
     time_t atime, mtime;
-    entry *prev, *next;
+    nlink_t nlink;
 };
 
 entry *ehead, *etail;
 
 void
-add_entry(const char *nm)
+add_entry(const char *nm, entry_data *data)
 {
     entry *ent = (entry *) malloc(sizeof(entry));
     char *name = strdup(nm);
     ent->name = name;
-    ent->buf = (char *) malloc(MAXLEN);
-    ent->c = 0;
-    ent->next = NULL;
-    sprintf(ent->buf, "%d\n", 0);
+    ent->prev = ent->next = NULL;
+    if (data) {
+        ent->data = data;
+        data->nlink++;
+    } else {
+        ent->data = (entry_data *) malloc(sizeof(entry_data));
+        ent->data->nlink = 1;
+        ent->data->buf = (char *) malloc(MAXLEN);
+        ent->data->c = 0;
+    }
+    sprintf(ent->data->buf, "%d\n", 0);
 
     if (!ehead)
         ehead = etail = ent;
@@ -71,8 +87,12 @@ remove_entry(const char *nm)
             ent->next->prev = ent->prev;
         else
             etail = ent->prev;
+        ent->data->nlink--;
+        if (!ent->data->nlink) {
+            free(ent->data->buf);
+            free(ent->data);
+        }
         free(ent->name);
-        free(ent->buf);
         free(ent);
         return 1;
     }
@@ -96,9 +116,9 @@ counter_getattr(const char *path, struct stat *stbuf)
     if (!has_subdir(path + 1) && find_entry(path + 1, &ent)) {
         stbuf->st_mode = S_IFREG | 0666;
         stbuf->st_nlink = 1;
-        stbuf->st_size = strlen(ent->buf);
-        stbuf->st_atime = ent->atime;
-        stbuf->st_mtime = ent->mtime;
+        stbuf->st_size = strlen(ent->data->buf);
+        stbuf->st_atime = ent->data->atime;
+        stbuf->st_mtime = ent->data->mtime;
     }
     else if (strcmp(path, "/") == 0) {
         stbuf->st_mode = S_IFDIR | 0755;
@@ -153,8 +173,8 @@ counter_open(const char *path, struct fuse_file_info *fi)
     fi->direct_io = 1;
     fi->fh = (uint64_t) tbuf;
     
-    sprintf(tbuf, "%d\n", ent->c);
-    sprintf(ent->buf, "%d\n", ent->c++);
+    sprintf(tbuf, "%d\n", ent->data->c);
+    sprintf(ent->data->buf, "%d\n", ent->data->c++);
 
     return 0;
 }
@@ -188,7 +208,7 @@ counter_create(const char *path, mode_t mod, struct fuse_file_info *fi)
     if (has_subdir(path))
         return -ENOENT;
 
-    add_entry(path + 1);
+    add_entry(path + 1, NULL);
 
     return 0;
 }
@@ -204,8 +224,8 @@ counter_utimens(const char *path, const struct timespec tv[2])
     if (!find_entry(path + 1, &ent))
         return -ENOENT;
         
-    ent->atime = tv[0].tv_sec;
-    ent->mtime = tv[1].tv_sec;
+    ent->data->atime = tv[0].tv_sec;
+    ent->data->mtime = tv[1].tv_sec;
     
     return 0;
 }
@@ -249,10 +269,27 @@ counter_release(const char *path, struct fuse_file_info *fi)
     return 0;
 }
 
+int
+counter_link(const char *from, const char *to)
+{
+    entry *ent;
+
+    if (has_subdir(from))
+        return -ENOENT;
+
+    if (!find_entry(from + 1, &ent))
+        return -ENOENT;
+
+    add_entry(to + 1, ent->data);
+
+    return 0;
+}
+
 struct fuse_operations counter_oper = {
     .getattr  = counter_getattr,
     .unlink   = counter_unlink,
     .rename   = counter_rename,
+    .link     = counter_link,
     .open     = counter_open,
     .read     = counter_read,
     .release  = counter_release,
