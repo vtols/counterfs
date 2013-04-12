@@ -115,7 +115,7 @@ counter_getattr(const char *path, struct stat *stbuf)
 
     if (!has_subdir(path + 1) && find_entry(path + 1, &ent)) {
         stbuf->st_mode = S_IFREG | 0666;
-        stbuf->st_nlink = 1;
+        stbuf->st_nlink = ent->data->nlink;
         stbuf->st_size = strlen(ent->data->buf);
         stbuf->st_atime = ent->data->atime;
         stbuf->st_mtime = ent->data->mtime;
