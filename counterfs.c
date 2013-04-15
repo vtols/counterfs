@@ -23,7 +23,7 @@ struct entry
 
 struct entry_data
 {
-    char *buf;
+    size_t size;
     unsigned int c;
     time_t atime, mtime;
     nlink_t nlink;
@@ -44,10 +44,9 @@ add_entry(const char *nm, entry_data *data)
     } else {
         ent->data = (entry_data *) malloc(sizeof(entry_data));
         ent->data->nlink = 1;
-        ent->data->buf = (char *) malloc(MAXLEN);
+        ent->data->size = 2;
         ent->data->c = 0;
     }
-    sprintf(ent->data->buf, "%d\n", 0);
 
     if (!ehead)
         ehead = etail = ent;
@@ -88,10 +87,8 @@ remove_entry(const char *nm)
         else
             etail = ent->prev;
         ent->data->nlink--;
-        if (!ent->data->nlink) {
-            free(ent->data->buf);
+        if (!ent->data->nlink)
             free(ent->data);
-        }
         free(ent->name);
         free(ent);
         return 1;
@@ -116,7 +113,7 @@ counter_getattr(const char *path, struct stat *stbuf)
     if (!has_subdir(path + 1) && find_entry(path + 1, &ent)) {
         stbuf->st_mode = S_IFREG | 0666;
         stbuf->st_nlink = ent->data->nlink;
-        stbuf->st_size = strlen(ent->data->buf);
+        stbuf->st_size = ent->data->size;
         stbuf->st_atime = ent->data->atime;
         stbuf->st_mtime = ent->data->mtime;
     }
@@ -174,7 +171,8 @@ counter_open(const char *path, struct fuse_file_info *fi)
     fi->fh = (uint64_t) tbuf;
     
     sprintf(tbuf, "%d\n", ent->data->c);
-    sprintf(ent->data->buf, "%d\n", ent->data->c++);
+    ent->data->size = strlen(tbuf);
+    ent->data->c++;
 
     return 0;
 }
