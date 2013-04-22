@@ -13,6 +13,7 @@
 
 typedef struct entry entry;
 typedef struct entry_data entry_data;
+typedef struct entry_rw_data entry_rw_data;
 
 struct entry
 {
@@ -27,6 +28,12 @@ struct entry_data
     unsigned int c;
     time_t atime, mtime;
     nlink_t nlink;
+};
+
+struct entry_rw_data
+{
+    char *rbuf, *wbuf;
+    size_t wsize;
 };
 
 entry *ehead, *etail;
@@ -155,10 +162,7 @@ int
 counter_open(const char *path, struct fuse_file_info *fi)
 {
     entry *ent;
-    char *tbuf;
-
-    if ((fi->flags & 3) != O_RDONLY)
-        return -EACCES;
+    entry_rw_data *rw;
 
     if (has_subdir(path))
         return -ENOENT;
@@ -166,14 +170,31 @@ counter_open(const char *path, struct fuse_file_info *fi)
     if (!find_entry(path + 1, &ent))
         return -ENOENT;
 
-    tbuf = malloc(MAXLEN);
+    rw = (entry_rw_data *) malloc(sizeof(entry_rw_data));
+    rw->rbuf  = (char *) malloc(MAXLEN);
+    rw->wbuf  = (char *) malloc(MAXLEN);
+    rw->wsize = 0;
+    memset(rw->wbuf, 0, MAXLEN);
     fi->direct_io = 1;
-    fi->fh = (uint64_t) tbuf;
-    
-    sprintf(tbuf, "%d\n", ent->data->c);
-    ent->data->size = strlen(tbuf);
+    fi->fh = (uint64_t) rw;
+
+    sprintf(rw->rbuf, "%u\n", ent->data->c);
+    ent->data->size = strlen(rw->rbuf);
     ent->data->c++;
 
+    return 0;
+}
+
+int
+counter_truncate(const char *path, off_t offset)
+{
+    entry *ent;
+    if (has_subdir(path))
+        return -ENOENT;
+
+    if (!find_entry(path + 1, &ent))
+        return -ENOENT;
+        
     return 0;
 }
 
@@ -182,20 +203,35 @@ counter_read(const char *path, char *buf, size_t size,
              off_t offset, struct fuse_file_info *fi)
 {
     size_t len;
-    entry *ent;
-    char *tbuf = (char *) fi->fh;
-    if (!find_entry(path + 1, &ent))
-        return -ENOENT;
+    entry_rw_data *rw = (entry_rw_data *) fi->fh;
 
-    len = strlen(tbuf);
+    len = strlen(rw->rbuf);
     if (offset < len) {
         if (offset + size > len)
             size = len - offset;
-        memcpy(buf, tbuf + offset, size);
-    } else
-        size = 0;
+        memcpy(buf, rw->rbuf + offset, size);
+        return size;
+    }
+    
+    return 0;
+}
 
-    return size;
+int
+counter_write(const char *path, const char *buf, size_t size,
+              off_t offset, struct fuse_file_info *fi)
+{
+    entry_rw_data *rw = (entry_rw_data *) fi->fh;
+
+    if (rw && offset < MAXLEN) {
+        if (offset + size > MAXLEN - 1)
+            size = MAXLEN - offset - 1;
+        if (offset + size > rw->wsize)
+            rw->wsize = offset + size;
+        memcpy(rw->wbuf + offset, buf, size);
+        return size;
+    }
+    
+    return 0;
 }
 
 int 
@@ -215,16 +251,16 @@ int
 counter_utimens(const char *path, const struct timespec tv[2])
 {
     entry *ent;
-    
+
     if (has_subdir(path))
         return -ENOENT;
 
     if (!find_entry(path + 1, &ent))
         return -ENOENT;
-        
+
     ent->data->atime = tv[0].tv_sec;
     ent->data->mtime = tv[1].tv_sec;
-    
+
     return 0;
 }
 
@@ -259,10 +295,40 @@ counter_rename(const char *from, const char *to)
 }
 
 int
+counter_flush(const char *path, struct fuse_file_info *fi)
+{
+    entry *ent;
+    unsigned int new_c = 0;
+    int size;
+    entry_rw_data *rw = (entry_rw_data *) fi->fh;
+    printf("Flushing\n");
+
+    if (has_subdir(path))
+        return -ENOENT;
+
+    if (!find_entry(path + 1, &ent))
+        return -ENOENT;
+    
+    if (rw && rw->wsize) {
+        sscanf(rw->wbuf, "%u", &new_c);
+        
+        ent->data->c = new_c;
+        sprintf(rw->wbuf, "%u%n", new_c, &size);
+        ent->data->size = size;
+    }
+    
+    return 0;
+}
+
+int
 counter_release(const char *path, struct fuse_file_info *fi)
 {
-    if (fi->fh)
-        free((void *) fi->fh);
+    if (fi->fh) {
+        entry_rw_data *rw = (entry_rw_data *) fi->fh;
+        free(rw->rbuf);
+        free(rw->wbuf);
+        free(rw);
+    }
 
     return 0;
 }
@@ -288,8 +354,11 @@ struct fuse_operations counter_oper = {
     .unlink   = counter_unlink,
     .rename   = counter_rename,
     .link     = counter_link,
+    .truncate = counter_truncate,
     .open     = counter_open,
     .read     = counter_read,
+    .write    = counter_write,
+    .flush    = counter_flush,
     .release  = counter_release,
     .readdir  = counter_readdir,
     .create   = counter_create,
